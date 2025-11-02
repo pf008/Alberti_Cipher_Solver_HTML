@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -55,7 +56,7 @@
         <span class="font-bold">Initial Key:</span> ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>
         <span class="font-bold">Indicator:</span> ?<br>
         <span class="font-bold">Score:</span> 0.00<br>
-        <span class="font-bold">Plaintext (Indicators Included):</span> Awaiting decryption...
+        <span class="font-bold">Plaintext (Clean):</span> Awaiting decryption...
       </div>
 
       <h2 class="mt-6 text-xl font-semibold text-indigo-600 border-b pb-2">Top 5 Candidate Keys</h2>
@@ -71,6 +72,7 @@
     const OUTER_ALPHABET_LOWER = 'abcdefghijklmnopqrstuvwxyz'; 
     let cracking = false;
     let topCandidates = [];
+    // Data structures for frequency maps
     let quadgramMap = {}, trigramMap = {}, bigramMap = {};
     let dictionarySet = new Set();
     let isDataLoaded = false;
@@ -89,7 +91,7 @@
                 if (response.ok) {
                     return response;
                 }
-                throw new Error(`HTTP error! status: ${response.status}`);
+                throw new Error(`HTTP error! status: ${response.status} for ${url}`);
             } catch (error) {
                 if (attempt < maxRetries - 1) {
                     const delay = Math.pow(2, attempt) * 1000;
@@ -103,8 +105,8 @@
 
     // --- Data Loading Functions ---
 
+    /** Loads N-gram frequencies and converts counts to log-probabilities. */
     async function loadFrequencies(file, map) {
-      // Logic for loading frequency files from quadgrams.txt, etc.
       try {
         const res = await fetchWithRetry(file);
         const text = await res.text();
@@ -129,11 +131,11 @@
         }
         STATUS.textContent = `Loaded ${file} successfully.`;
       } catch (error) {
-        STATUS.textContent = `ERROR loading ${file}: ${error.message}. Please ensure the file exists.`;
-        throw error;
+        throw error; 
       }
     }
 
+    /** Loads dictionary words. */
     async function loadDictionary(file) {
       try {
         const res = await fetchWithRetry(file);
@@ -143,25 +145,28 @@
         }
         STATUS.textContent = `Loaded ${file} successfully. Total words: ${dictionarySet.size}.`;
       } catch (error) {
-        STATUS.textContent = `ERROR loading ${file}: ${error.message}. Please ensure the file exists.`;
         throw error;
       }
     }
 
+    /** Loads all required scoring data. */
     async function loadAllScoringData() {
         document.getElementById('loadingIndicator').classList.remove('hidden');
         try {
+            // Load the four required core files
             await Promise.all([
                 loadFrequencies('quadgrams.txt', quadgramMap),
                 loadFrequencies('trigrams.txt', trigramMap),
                 loadFrequencies('bigrams.txt', bigramMap),
                 loadDictionary('dictionary.txt')
             ]);
+            
             isDataLoaded = true;
-            STATUS.textContent = "All files loaded. Ready to crack!";
+            STATUS.textContent = "All 4 scoring files loaded. Ready to crack!";
         } catch (error) {
             isDataLoaded = false;
-            STATUS.textContent = "CRITICAL ERROR: Failed to load one or more required data files. Check console for details.";
+            console.error("CRITICAL ERROR: Failed to load one or more core data files.", error);
+            STATUS.textContent = `CRITICAL ERROR: Failed to load core files. Please ensure quadgrams.txt, trigrams.txt, bigrams.txt, and dictionary.txt are present.`;
         } finally {
             document.getElementById('loadingIndicator').classList.add('hidden');
         }
@@ -169,22 +174,21 @@
 
     // --- Alberti Decryption Logic (Segmented) ---
 
-    /** * Decrypts ciphertext using the segmented Alberti mechanism found in your uploaded file.
+    /** * Decrypts ciphertext using the segmented Alberti mechanism.
      * @param {string} ciphertext - The text with UPPERCASE indicators and lowercase cipher chars.
      * @param {string} innerKey - The 26-char permutation (Inner Disk).
      * @param {string} fixedIndicator - The assumed fixed indicator letter (e.g., 'T').
      * @returns {{displayText: string, scoreText: string}}
      */
     function decodeAlberti(ciphertext, innerKey, fixedIndicator) {
-      let plaintext = '';
-      let scoreablePlaintext = '';
+      let plaintext = ''; // Text with bracketed indicators for display: [A]thequick[R]
+      let scoreablePlaintext = ''; // Clean text used for scoring: THEQUICKBROWNFOX
       let i = 0;
       
       // Fixed index of the indicator on the inner key
       const indicatorIndex = innerKey.indexOf(fixedIndicator);
 
       if (indicatorIndex === -1) {
-          // If the fixed indicator is not in the key, decryption is impossible.
           return { displayText: 'ERROR: Indicator not in key', scoreText: '' }; 
       }
 
@@ -195,15 +199,13 @@
           // 1. Indicator Letter (UPPERCASE)
           const indicatorCap = ciphertext[i++];
           
-          plaintext += indicatorCap; // Include indicator in display text
+          // Display indicator in brackets for trace
+          plaintext += `[${indicatorCap}]`; 
           
           // Find the new segment shift based on the indicator letter
           const capIndex = OUTER_ALPHABET.indexOf(indicatorCap); // Position of indicator on Outer Disk
           
           // Calculate shift: distance from Outer[IndicatorCap] to Inner[fixedIndicator]
-          // The decrypted character is the one on the Outer Disk that aligns with the Inner Disk's position.
-          // This calculates the necessary rotation of the OUTER disk to align OUTER[capIndex] with INNER[indicatorIndex].
-          // Effectively, it calculates the Vigenere shift required for this segment.
           const shift = (capIndex - indicatorIndex + 26) % 26;
           const rotatedOuter = ROTATIONS[shift];
           
@@ -269,14 +271,15 @@
       return count * 15.0; // Dictionary matches are highly valuable
     }
 
+    /** Calculates the combined score using Quadgram, Trigram, Bigram, and Dictionary weights. */
     function fullScore(text) {
-      // Quadgrams are the most reliable metric, hence the highest weight (0.5)
       const q = scoreNgrams(text, quadgramMap, 4);
       const t = scoreNgrams(text, trigramMap, 3);
       const b = scoreNgrams(text, bigramMap, 2);
       const d = scoreDictionary(text);
       
-      return (0.5 * q) + (0.3 * t) + (0.1 * b) + (0.1 * d);
+      // New weights: Q (45%), T (35%), B (10%), D (10%)
+      return (0.45 * q) + (0.35 * t) + (0.10 * b) + (0.10 * d);
     }
 
     // --- Hill Climbing Core Functions ---
@@ -290,7 +293,7 @@
       return letters.join('');
     }
 
-    function generateNeighbors(key, numNeighbors = 50) {
+    function generateNeighbors(key, numNeighbors = 100) {
       const neighbors = [];
       for (let i = 0; i < numNeighbors; i++) {
         const arr = key.split('');
@@ -304,7 +307,7 @@
       return neighbors;
     }
 
-    /** Updates the list of top 5 candidates, which includes the fixedIndicator that yielded the best score. */
+    /** Updates the list of top 5 candidates. */
     function updateTopCandidates(candidate) {
       const existingIndex = topCandidates.findIndex(c => c.key === candidate.key && c.indicator === candidate.indicator);
       
@@ -326,13 +329,13 @@
               `<span class="font-bold">Initial Key:</span> ${best.key}<br>` +
               `<span class="font-bold">Indicator:</span> ${best.indicator}<br>` +
               `<span class="font-bold">Score:</span> ${best.score.toFixed(4)}<br>` +
-              `<span class="font-bold">Plaintext (Indicators Included):</span> ${best.text.displayText.slice(0, 150)}...`;
+              `<span class="font-bold">Plaintext (Clean):</span> ${best.text.scoreText.slice(0, 150)}...`; // Uses scoreText (clean)
       }
 
       // Update the top candidates list
       const resultsDiv = document.getElementById('results');
       resultsDiv.innerHTML = topCandidates.map(c =>
-        `<div><span class="text-green-700">${c.score.toFixed(4)}</span> | Ind: ${c.indicator} | Key ${c.key.slice(0, 15)}... | ${c.text.displayText.slice(0, 50)}...</div>`
+        `<div><span class="text-green-700">${c.score.toFixed(4)}</span> | Ind: ${c.indicator} | Key ${c.key.slice(0, 15)}... | Plaintext: ${c.text.displayText.slice(0, 50)}...</div>` // Uses displayText (with brackets) for tracing
       ).join('');
     }
 
@@ -340,7 +343,7 @@
 
     async function startCracking() {
       const ciphertext = document.getElementById('ciphertext').value.trim();
-      const minLength = 30; // Reduced minimum length for flexibility
+      const minLength = 30;
       if (ciphertext.replace(/[^a-zA-Z]/g, '').length < minLength) {
         STATUS.textContent = `Error: Ciphertext (non-space characters) is too short for Hill Climbing. Please use at least ${minLength} characters.`;
         return;
@@ -393,7 +396,7 @@
         iterations++;
         
         const neighbors = generateNeighbors(currentBestCandidate.key, 100); 
-        let bestNeighborCandidate = currentBestCandidate; // Start comparison with the current best solution
+        let bestNeighborCandidate = currentBestCandidate; 
 
         // Iterate through all neighbors
         for (const nKey of neighbors) {
